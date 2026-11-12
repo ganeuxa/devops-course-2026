@@ -28,5 +28,25 @@ check "Firewall active" active "$(awk '$1=="Status:"{print $2}' <<< "$ufw_status
 check "Default incoming policy is deny" deny "$(awk '$1=="Default:" && $3=="(incoming),"{print $2}' <<< "$ufw_status")"
 echo "[3] Local accounts"
 awk -F: '$3>=1000 && $3<65534 {printf "    %s (uid=%s)\n",$1,$3}' /etc/passwd
+echo "[4] Web server"
+nginx_state=$(systemctl is-active nginx) || true
+check "Nginx service active" active "$nginx_state"
+
+nginx_config=invalid
+if sudo nginx -t >/dev/null 2>&1; then nginx_config=valid; fi
+check "Nginx configuration valid" valid "$nginx_config"
+
+certificate=invalid
+if openssl x509 -in /etc/ssl/certs/devops.crt -noout -checkend "${CERT_MIN_SECONDS:-2592000}" >/dev/null 2>&1; then
+    certificate=valid
+fi
+check "TLS certificate meets validity threshold" valid "$certificate"
+
+site_permissions=invalid
+if writable=$(find /var/www/devops-site -perm -o+w -print) && [[ -z "$writable" ]] &&
+   key_mode=$(sudo stat -c '%a' /etc/ssl/private/devops.key) && [[ "$key_mode" == 600 ]]; then
+    site_permissions=valid
+fi
+check "Site is not world-writable and TLS key mode is 600" valid "$site_permissions"
 printf 'Passed: %d, failed: %d\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

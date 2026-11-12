@@ -48,5 +48,24 @@ if writable=$(find /var/www/devops-site -perm -o+w -print) && [[ -z "$writable" 
     site_permissions=valid
 fi
 check "Site is not world-writable and TLS key mode is 600" valid "$site_permissions"
+echo "[5] Containerization"
+docker_state=$(systemctl is-active docker) || true
+check "Docker service active" active "$docker_state"
+
+db_health=$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null) || db_health=unavailable
+check "Database container healthy" healthy "$db_health"
+
+ports=invalid
+if listeners=$(ss -H -ltn) && awk '
+    $4 == "127.0.0.1:5000" { app = 1; next }
+    $4 ~ /:(5000|5432)$/ { unexpected = 1 }
+    END { exit !(app && !unexpected) }
+' <<< "$listeners"; then
+    ports=valid
+fi
+check "App listens on loopback only and PostgreSQL is not published" valid "$ports"
+
+env_mode=$(stat -c '%a' /home/devops/app/.env 2>/dev/null) || env_mode=unavailable
+check "Compose environment file mode is 600" 600 "$env_mode"
 printf 'Passed: %d, failed: %d\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

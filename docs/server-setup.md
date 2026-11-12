@@ -108,3 +108,44 @@ server {
 Включите ресурс символьной ссылкой в /etc/nginx/sites-enabled и отключите ссылку default. После изменений выполните sudo nginx -t && sudo systemctl reload nginx. В UFW используются правила 80/tcp и 443/tcp.
 
 Скопируйте открытый сертификат в ~/devops.crt через SSH. В рабочей копии выполните scripts/deploy.sh --dry-run и scripts/deploy.sh. Для проверки используйте curl --cacert ~/devops.crt https://devops.local. Снимок после настройки HTTPS — 04-nginx-https.
+
+## 9. Контейнеризация
+
+Docker Engine 29.9.3 установлен из официального APT-репозитория Docker для Ubuntu Noble. Используется плагин Compose v5.7.1. Учётная запись devops включена в группу docker.
+
+С хоста синхронизируйте app/ с каталогом /home/devops/app. Файл .env исключён из Git, контекста сборки и синхронизации.
+
+~~~bash
+rsync -avz --delete --chmod=D755,F644 --exclude=.env -e 'ssh -o BatchMode=yes' app/ devops:app/
+~~~
+
+На сервере создайте /home/devops/app/.env с правами 600 при первом запуске. При восстановлении с сохранённым томом используйте исходные реквизиты базы.
+
+~~~bash
+cd ~/app
+if [ ! -e .env ]; then
+    umask 077
+    password=$(openssl rand -hex 16)
+    sed "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$password/" .env.example > .env
+    unset password
+fi
+chmod 600 .env
+docker compose up -d --build --wait
+docker compose ps
+~~~
+
+Gunicorn слушает 5000 в контейнере. На сервере опубликован только 127.0.0.1:5000. PostgreSQL 16 использует сеть backend, имя db и том app_db_data. Порт 5432 доступен внутри сети Compose. Команда docker compose down сохраняет именованный том.
+
+В HTTPS-блок /etc/nginx/sites-available/devops-site добавьте:
+
+~~~nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+~~~
+
+Примените sudo nginx -t && sudo systemctl reload nginx. Проверьте curl --cacert ~/devops.crt https://devops.local/app/health и HTTP 200 для статического ресурса /. Снимок проекта — 05-docker-compose.

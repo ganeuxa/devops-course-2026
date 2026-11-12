@@ -62,3 +62,49 @@ sudo ufw status verbose
 - 03-ssh-hardened — после проверки порта 2222 и запрета входа под root и по паролю.
 
 Для проверки конечного состояния запустите scripts/audit.sh на гостевом сервере.
+
+## 8. Веб-сервер
+
+Установите пакеты nginx и rsync. Создайте /var/www/devops-site с владельцем devops:devops и правами 755. Каталоги ресурса имеют права 755, файлы — 644.
+
+Сформируйте сертификат на 365 дней с SAN devops.local. Закрытый ключ хранится на сервере.
+
+~~~bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt \
+  -subj '/CN=devops.local' -addext 'subjectAltName=DNS:devops.local'
+sudo chmod 600 /etc/ssl/private/devops.key
+sudo chmod 644 /etc/ssl/certs/devops.crt
+~~~
+
+Конфигурация /etc/nginx/sites-available/devops-site:
+
+~~~nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name devops.local;
+    access_log /var/log/nginx/devops-site.access.log;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    ssl_certificate /etc/ssl/certs/devops.crt;
+    ssl_certificate_key /etc/ssl/private/devops.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_name devops.local;
+    root /var/www/devops-site;
+    index index.html;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    error_page 404 /404.html;
+    access_log /var/log/nginx/devops-site.access.log;
+    error_log /var/log/nginx/devops-site.error.log;
+}
+~~~
+
+Включите ресурс символьной ссылкой в /etc/nginx/sites-enabled и отключите ссылку default. После изменений выполните sudo nginx -t && sudo systemctl reload nginx. В UFW используются правила 80/tcp и 443/tcp.
+
+Скопируйте открытый сертификат в ~/devops.crt через SSH. В рабочей копии выполните scripts/deploy.sh --dry-run и scripts/deploy.sh. Для проверки используйте curl --cacert ~/devops.crt https://devops.local. Снимок после настройки HTTPS — 04-nginx-https.
